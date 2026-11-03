@@ -11,6 +11,8 @@ holds the GitHub App keys so runners never do. Pre-code: only docs exist so far.
 - [`docs/overview.md`](docs/overview.md): what this is, the layout, the status.
 - [`docs/decisions/`](docs/decisions/): why it is built this way. Read before changing a
   load-bearing choice; the alternatives listed there were already set aside.
+- [`docs/design/credential-broker/`](docs/design/credential-broker/README.md): the design package
+  (proposal, decision log, test-gated spec). Start at its README.
 
 ## Essentials
 

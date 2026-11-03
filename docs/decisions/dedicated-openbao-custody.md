@@ -21,12 +21,13 @@ Mounts and policies stay separate per function. The instance never unseals the h
 - Another service to run, back up and unseal. Its unseal path is undecided.
 - Each added function widens what a compromise of this instance reaches. Keep it to signing and
   machine identity.
-- Open: GitHub generates the app private key itself. Signing in transit needs the key imported,
-  and this is not verified for OpenBao. If import is not possible, the fallback is a sealed key
-  file readable only by the signer.
+- Signing in transit needs GitHub's generated key imported. OpenBao supports RSA key import; the
+  acceptance test is in [transit-signing-first](transit-signing-first.md).
+- The instance does signing and machine identity only: transit, PKI and lease records. A mount
+  for another purpose needs its own decision.
 
 **Set aside.** The hub OpenBao with a new transit mount [^hub]. A sealed key file in the broker
-process: the process, and anyone with host root, can read the key.
+process: the process, and anyone with host root, can read the key. Its unseal path is undecided.
 
 [^hub]: Reuses Kubernetes auth and policies, but shares the hub's root of trust, which already
     depends on a Cloudflare account that holds DNS, the tunnel and R2 state.
