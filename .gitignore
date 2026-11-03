@@ -1,0 +1,29 @@
+.claude/
+
+# Local, machine-specific Claude settings
+settings.local.json
+
+# Nix
+/result
+/result-*
+.pre-commit-config.yaml
+
+# direnv
+.direnv/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Secrets and key material
+.env*
+*.pem
+*.key
+*.p12
+*.pfx
+*id_ed25519*
