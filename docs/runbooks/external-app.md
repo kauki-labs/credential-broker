@@ -8,7 +8,7 @@ moves the key into OpenBao and replaces the script (see the
 
 | Item | Value |
 |------|-------|
-| App name | `external` (acts as `external[bot]`) |
+| App name | `external actor` (acts as `external-actor[bot]`). `external` is the short name used for it in this repo; the name `external` was not available on GitHub |
 | Owner | `kauki-labs` (org). A private App installs only on its own owner |
 | Permissions (ceiling) | `metadata` read; `contents`, `pull_requests`, `issues` write |
 | Manifest | [`apps/external.kauki-labs.manifest.json`](../../apps/external.kauki-labs.manifest.json) |

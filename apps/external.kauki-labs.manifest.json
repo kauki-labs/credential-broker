@@ -1,5 +1,5 @@
 {
-  "name": "external",
+  "name": "external actor",
   "url": "https://github.com/kauki-labs/credential-broker",
   "description": "GitHub App for agents outside the platform. Interim trust root until the credential broker signs through OpenBao. Private key held by the operator.",
   "public": false,
