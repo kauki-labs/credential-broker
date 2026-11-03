@@ -1,0 +1,69 @@
+name: PR
+on:
+  merge_group:
+    types: [checks_requested]
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
+  cancel-in-progress: true
+jobs:
+  validate-pr-title:
+    name: Validate title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            fix
+            feat
+            build
+            chore
+            ci
+            docs
+            style
+            refactor
+            perf
+            test
+          requireScope: false
+          ignoreLabels: |
+            bot
+            ignore-semantic-pull-request
+  docs:
+    name: Validate docs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the docs structure
+        run: python3 -I scripts/validate_docs.py .
+  # Single aggregate merge gate: green only if every other job in this run succeeded. Mark THIS
+  # one as the required check in the ruleset, so adding or renaming a job never needs a ruleset
+  # change. validate-pr-title only runs on pull_request, so it may skip on merge_group.
+  merge-gate:
+    name: Merge gate
+    if: always()
+    needs:
+      - validate-pr-title
+      - docs
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Require all jobs to pass
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: validate-pr-title
