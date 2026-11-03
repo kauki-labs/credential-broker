@@ -50,6 +50,18 @@ jobs:
           persist-credentials: false
       - name: Check the docs structure
         run: python3 -I scripts/validate_docs.py .
+  minter:
+    name: Test the token minter
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint the shell scripts
+        run: shellcheck --severity=warning scripts/github-app-token tests/test-github-app-token.sh tests/acceptance-live.sh
+      - name: Run the offline acceptance tests
+        run: bash tests/test-github-app-token.sh
   # Single aggregate merge gate: green only if every other job in this run succeeded. Mark THIS
   # one as the required check in the ruleset, so adding or renaming a job never needs a ruleset
   # change. validate-pr-title only runs on pull_request, so it may skip on merge_group.
@@ -59,6 +71,7 @@ jobs:
     needs:
       - validate-pr-title
       - docs
+      - minter
     runs-on: ubuntu-24.04
     permissions: {}
     steps:

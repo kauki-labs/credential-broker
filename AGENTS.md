@@ -4,7 +4,7 @@ Single source of truth for AI coding agents (Claude Code reads this natively; Co
 it as `AGENTS.md`). Start in [`docs/`](docs/).
 
 A broker that mints short-lived, action-scoped GitHub credentials for external runners. It
-holds the GitHub App keys so runners never do. Pre-code: only docs exist so far.
+holds the GitHub App keys so runners never do. Pre-service: the design is docs; the only code is the interim operator-side token minter for the `external` App ([runbook](docs/runbooks/external-app.md)).
 
 ## Read first
 
@@ -20,4 +20,5 @@ holds the GitHub App keys so runners never do. Pre-code: only docs exist so far.
 - Branches: `<nick>/<type>/<component>/<description>`. Titles: Conventional Commits (CI checks).
 - Never push to `main`. Open a PR; the merge stays with the maintainer.
 - Run `python3 scripts/validate_docs.py .` before a PR that touches `docs/` or `AGENTS.md`.
+- Run `bash tests/test-github-app-token.sh` before a PR that touches `scripts/github-app-token`. `tests/acceptance-live.sh` is operator-only (needs the App key); CI never runs it.
 - Infra (the GitHub App registrations, OpenBao, deployment) lives in `kauki-labs/infra`, not here.
