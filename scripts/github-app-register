@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Register a GitHub App from the manifest in apps/ in one click, with a configurable broker URL.
+
+Runs GitHub's App Manifest flow for the person at the keyboard, so nobody has to POST the form
+or race the one-time code by hand. The App is owned by whoever clicks, and so is its key: there
+is no shared key. The broker URL sets the webhook URL and the Setup URL; it defaults to localhost.
+
+    github-app-register [--broker-url URL] [--org ORG] [--name NAME] [--public] [--out-dir DIR]
+
+It serves one page on 127.0.0.1 (never another interface), you open it and click the button,
+GitHub redirects back with a one-time code, and the code is exchanged at once. The private key and
+the webhook secret go to files at mode 0600 in --out-dir (default ~/.config/kauki), never to the
+terminal. The client secret GitHub also returns is discarded. Only non-secret ids are printed.
+Standard library only.
+"""
+from __future__ import annotations
+
+import argparse
+import html
+import http.server
+import json
+import os
+import re
+import secrets
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+GITHUB = "https://github.com"
+API = "https://api.github.com"
+DEFAULT_BROKER = "http://localhost:8080"
+TEMPLATE = Path(__file__).resolve().parent.parent / "apps" / "external.kauki-labs.manifest.json"
+URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+")
+ORG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,33}")
+SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+CODE_RE = re.compile(r"[A-Za-z0-9]{20,80}")
+
+
+class RegisterError(Exception):
+    pass
+
+
+def check(regex: re.Pattern[str], value: object, what: str) -> str:
+    if not isinstance(value, str) or not regex.fullmatch(value):
+        raise RegisterError(f"invalid {what}")
+    return value
+
+
+def build_manifest(template: dict, broker_url: str, redirect_url: str, name: str, public: bool) -> dict:
+    base = check(URL_RE, broker_url, "broker URL").rstrip("/")
+    manifest = dict(template)
+    manifest.update(
+        name=check(NAME_RE, name, "app name"),
+        public=public,
+        redirect_url=redirect_url,
+        setup_url=f"{base}/github/setup",
+        hook_attributes={"url": f"{base}/github/webhook", "active": True},
+    )
+    return manifest
+
+
+def owner_url(org: str | None) -> str:
+    if org is None:
+        return f"{GITHUB}/settings/apps/new"
+    return f"{GITHUB}/organizations/{check(ORG_RE, org, 'organization name')}/settings/apps/new"
+
+
+def page(manifest: dict, target: str, state: str) -> str:
+    return (
+        "<!doctype html><meta charset=utf-8><title>Register GitHub App</title>"
+        f'<form method="post" action="{html.escape(target)}?state={state}">'
+        f'<input type="hidden" name="manifest" value="{html.escape(json.dumps(manifest), quote=True)}">'
+        f"<p>Create the GitHub App <b>{html.escape(manifest['name'])}</b>. "
+        f"Webhook: {html.escape(manifest['hook_attributes']['url'])}</p>"
+        "<button>Create GitHub App</button></form>"
+    )
+
+
+# No proxies: the code and the key must not pass through an environment-selected proxy.
+_open = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+
+
+def exchange(code: str, urlopen=_open) -> dict:
+    request = urllib.request.Request(
+        f"{API}/app-manifests/{check(CODE_RE, code, 'code')}/conversions",
+        data=b"",
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "credential-broker-register",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as err:
+        body = err.read()[:200].decode("utf-8", "replace")
+        raise RegisterError(f"GitHub answered HTTP {err.code}: {body}") from None
+    except (urllib.error.URLError, ValueError, TimeoutError) as err:
+        raise RegisterError(f"the exchange with GitHub failed: {type(err).__name__}") from None
+
+
+def write_secret(path: Path, text: str) -> Path:
+    """Create the file at mode 0600 without ever overwriting: the key is shown once, so on a
+    name clash it goes to a numbered sibling instead of being lost."""
+    for n in range(100):
+        target = path if n == 0 else path.with_name(f"{path.name}.{n}")
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        return target
+    raise RegisterError(f"too many existing files named {path.name}")
+
+
+def save(response: dict, out_dir: Path) -> dict:
+    try:
+        slug, pem, hook = response["slug"], response["pem"], response["webhook_secret"]
+        ids = {key: response[key] for key in ("id", "client_id", "html_url")}
+    except (KeyError, TypeError):
+        raise RegisterError("GitHub's answer lacks an expected field") from None
+    check(SLUG_RE, slug, "slug in GitHub's answer")
+    if not (isinstance(pem, str) and pem.startswith("-----BEGIN") and isinstance(hook, str) and hook):
+        raise RegisterError("unexpected key or webhook secret in GitHub's answer")
+    out_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    key_file = write_secret(out_dir / f"{slug}.pem", pem if pem.endswith("\n") else pem + "\n")
+    secret_file = write_secret(out_dir / f"{slug}.webhook-secret", hook + "\n")
+    return {**ids, "slug": slug, "key_file": str(key_file), "webhook_secret_file": str(secret_file)}
+
+
+def _handler(ctx: dict):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):  # the one-time code is in the request line: keep it out of logs
+            pass
+
+        def _send(self, status: int, body: str) -> None:
+            data = body.encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self) -> None:
+            # A Host check blocks DNS rebinding: only the loopback name and port we bound answer.
+            if self.headers.get("Host") not in (f"127.0.0.1:{ctx['port']}", f"localhost:{ctx['port']}"):
+                return self._send(400, "bad host")
+            url = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(url.query)
+            if url.path == "/":
+                return self._send(200, page(ctx["manifest"], ctx["owner_url"], ctx["state"]))
+            if url.path != "/callback":
+                return self._send(404, "not found")
+            if ctx["done"]:
+                return self._send(409, "already handled")
+            state = query.get("state", [""])[0]
+            if not secrets.compare_digest(state.encode(), ctx["state"].encode()):
+                return self._send(400, "bad state")
+            try:
+                code = check(CODE_RE, query.get("code", [""])[0], "code")
+                summary = save(ctx["exchange"](code), ctx["out_dir"])
+            except RegisterError as err:
+                ctx["done"].append(("error", str(err)))
+                return self._send(502, html.escape(f"Registration failed: {err}"))
+            ctx["done"].append(("ok", summary))
+            self._send(200, "Registered. You can close this tab and return to the terminal.")
+
+    return Handler
+
+
+def make_server(template, broker_url, org, name, public, out_dir, port, do_exchange):
+    ctx: dict = {"done": []}
+    server = http.server.HTTPServer(("127.0.0.1", port), _handler(ctx))
+    bound = server.server_address[1]
+    try:
+        ctx.update(
+            state=secrets.token_urlsafe(24),
+            port=bound,
+            out_dir=Path(out_dir),
+            owner_url=owner_url(org),
+            exchange=do_exchange,
+            manifest=build_manifest(template, broker_url, f"http://127.0.0.1:{bound}/callback", name, public),
+        )
+    except RegisterError:
+        server.server_close()
+        raise
+    return server, ctx
+
+
+def serve(server, ctx: dict, timeout: float) -> None:
+    server.timeout = 0.5
+    deadline = time.monotonic() + timeout
+    while not ctx["done"] and time.monotonic() < deadline:
+        server.handle_request()
+
+
+def main(argv=None) -> int:
+    template = json.loads(TEMPLATE.read_text())
+    parser = argparse.ArgumentParser(description="Register a GitHub App with the manifest flow.")
+    parser.add_argument("--broker-url", default=DEFAULT_BROKER, help=f"base URL of the broker (default {DEFAULT_BROKER})")
+    parser.add_argument("--org", help="register under this organization instead of your account")
+    parser.add_argument("--name", default=template["name"], help="App name (default: %(default)s)")
+    parser.add_argument("--public", action="store_true", help="let any account install it (default: only the owner)")
+    parser.add_argument("--out-dir", default=str(Path.home() / ".config" / "kauki"))
+    parser.add_argument("--port", type=int, default=0, help="loopback port (default: any free port)")
+    parser.add_argument("--timeout", type=float, default=600, help="seconds to wait for the click")
+    args = parser.parse_args(argv)
+    try:
+        server, ctx = make_server(template, args.broker_url, args.org, args.name, args.public,
+                                  args.out_dir, args.port, exchange)
+    except (RegisterError, OSError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    print(f"Open http://127.0.0.1:{ctx['port']}/ in your browser and click Create GitHub App.")
+    print(f"Broker URL: {args.broker_url} (webhook and setup URLs are derived from it)")
+    serve(server, ctx, args.timeout)
+    server.server_close()
+    if not ctx["done"]:
+        print("error: timed out waiting for the registration", file=sys.stderr)
+        return 1
+    kind, result = ctx["done"][0]
+    if kind == "error":
+        print(f"error: {result}", file=sys.stderr)
+        return 1
+    for key in ("id", "client_id", "slug", "html_url", "key_file", "webhook_secret_file"):
+        print(f"{key}: {result[key]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

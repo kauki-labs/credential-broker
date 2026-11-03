@@ -17,4 +17,5 @@ One record per active decision. A denied alternative is a footnote on the decisi
 | [mtls-runner-identity](mtls-runner-identity.md): runners authenticate with client certificates | accepted |
 | [dedicated-openbao-custody](dedicated-openbao-custody.md): a dedicated OpenBao holds the app keys | proposed |
 | [one-app-two-key-slots](one-app-two-key-slots.md): one GitHub App with two key slots | accepted |
+| [installer-owned-apps](installer-owned-apps.md): each installer registers and owns their own App | accepted |
 | [license-agpl-commercial](license-agpl-commercial.md): AGPL-3.0 with a commercial license | accepted |

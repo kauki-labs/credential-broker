@@ -40,6 +40,7 @@ flowchart LR
 | `docs/decisions/` | active decisions and the alternatives set aside |
 | `scripts/validate_docs.py` | docs structure check, run by CI |
 | `scripts/github-app-token` | interim operator-side minter for the `external` GitHub App ([runbook](runbooks/external-app.md)) |
+| `scripts/github-app-register` | one-click App registration through the manifest flow, with a configurable broker URL |
 | `scripts/github-app-webhook` | sets or shows the App's webhook URL and secret |
 | `apps/` | GitHub App manifests |
 | `tests/` | offline acceptance tests (CI) and live acceptance tests (operator only) |
