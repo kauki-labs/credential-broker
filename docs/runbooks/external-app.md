@@ -58,13 +58,18 @@ scripts/github-app-register --org my-org --broker-url https://broker.example.org
 scripts/github-app-register --public                          # installable on other accounts too
 ```
 
-Open the printed `http://127.0.0.1:<port>/` link and click **Create GitHub App**. GitHub redirects
+Open the printed `http://127.0.0.1:<port>/<token>/` link and click **Create GitHub App**. GitHub redirects
 back, and the helper exchanges the one-time code at once. It writes `<slug>.pem` and
-`<slug>.webhook-secret` at mode 0600 to `~/.config/kauki` (never overwriting an existing file) and
-prints only the ids. It serves on loopback only, checks a random `state` value and the `Host`
-header, and discards the client secret. The webhook and Setup URLs come from `--broker-url`; to
+`<slug>.webhook-secret` at mode 0600 to `~/.config/kauki` (never overwriting an existing file; a
+name clash gets a numbered sibling) and prints only the ids. The key is written first, so a
+problem with any other field cannot lose it. It serves on loopback only, behind a random token in
+the URL path, and checks a random `state` value and the `Host` header. Other users on a shared
+machine can reach the port but not the token. It discards the client secret. If the run fails after
+GitHub has created the App, the App exists without a saved key: open its settings and generate a
+new key, or delete it. The webhook and Setup URLs come from `--broker-url`; to
 change them later use `scripts/github-app-webhook` and the App's General page. Then install the App
-and follow "Get a token" below with the new key and ids.
+and follow "Get a token" below with the new key and ids. The minter's `allowed_repos` line is fixed
+to `sandy` and `credential-broker`: edit it to your own repository names, or it refuses them.
 
 ## App settings sheet
 
@@ -137,7 +142,7 @@ GH_TOKEN=$TOKEN gh api -X DELETE /installation/token
 |-------|------|--------|
 | `tests/test-github-app-token.sh` | CI (`Merge gate`) and locally. Offline, fake `curl` | JWT claims and signature, exact read and write request bodies, curl hardening, hostile inputs, key-file modes and symlinks, upstream failure modes, no secret in argv, xtrace or `TMPDIR` |
 | `tests/test-github-app-webhook.sh` | CI and locally. Offline, fake `curl` | JWT, exact PATCH body, secret never on argv or in output, body file mode and cleanup, URL and secret validation, key and secret file modes, upstream failures, xtrace |
-| `tests/test_github_app_register.py` | CI and locally. Offline, injected exchange, real loopback sockets | Manifest fields and permissions, hostile inputs, form round trip, state and Host checks, one-shot callback, files at 0600, no overwrite or symlink follow, no secret in output |
+| `tests/test_github_app_register.py` | CI and locally. Offline, injected exchange, real loopback sockets | Manifest fields and permissions, hostile inputs, form round trip, secret path token, state and Host checks, one-shot callback that ends the run on any failure, the key written first, idle connections, files at 0600, no overwrite or symlink follow, no secret in output |
 | `tests/test-acceptance-live.sh` | CI and locally. Runs the live suite against a fake GitHub | An honest fake passes; a wrong install, an over-wide App, a read token that can write and a failing revoke each fail the suite; the suite leaves no branch and revokes every token |
 | `tests/acceptance-live.sh` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: the install is "Only select repositories" and reaches exactly `sandy` and `credential-broker`; the App permissions equal the ceiling; a read token reads and cannot write; a write token writes to its repo only; early revoke returns 401 |
 

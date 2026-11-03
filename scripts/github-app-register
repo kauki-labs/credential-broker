@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import http.client
 import http.server
 import json
 import os
@@ -42,6 +43,11 @@ CODE_RE = re.compile(r"[A-Za-z0-9]{20,80}")
 
 class RegisterError(Exception):
     pass
+
+
+# GitHub shows the key once and the code is spent after the exchange, so a failure after it leaves
+# an App with no saved key. Say so, because the fix is outside this helper.
+LOST_KEY_HINT = " The App may exist on GitHub without a saved key: open its settings and generate a new key, or delete it."
 
 
 def check(regex: re.Pattern[str], value: object, what: str) -> str:
@@ -101,7 +107,7 @@ def exchange(code: str, urlopen=_open) -> dict:
     except urllib.error.HTTPError as err:
         body = err.read()[:200].decode("utf-8", "replace")
         raise RegisterError(f"GitHub answered HTTP {err.code}: {body}") from None
-    except (urllib.error.URLError, ValueError, TimeoutError) as err:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as err:
         raise RegisterError(f"the exchange with GitHub failed: {type(err).__name__}") from None
 
 
@@ -121,22 +127,34 @@ def write_secret(path: Path, text: str) -> Path:
 
 
 def save(response: dict, out_dir: Path) -> dict:
-    try:
-        slug, pem, hook = response["slug"], response["pem"], response["webhook_secret"]
-        ids = {key: response[key] for key in ("id", "client_id", "html_url")}
-    except (KeyError, TypeError):
-        raise RegisterError("GitHub's answer lacks an expected field") from None
-    check(SLUG_RE, slug, "slug in GitHub's answer")
-    if not (isinstance(pem, str) and pem.startswith("-----BEGIN") and isinstance(hook, str) and hook):
-        raise RegisterError("unexpected key or webhook secret in GitHub's answer")
+    """Write the key first: it is shown once, so nothing else may stand between GitHub's answer and
+    the key file. Anything else that is off becomes a warning, never a reason to drop the key."""
+    if not isinstance(response, dict):
+        raise RegisterError("GitHub's answer is not an object")
+    pem = response.get("pem")
+    if not (isinstance(pem, str) and pem.startswith("-----BEGIN")):
+        raise RegisterError("GitHub's answer holds no private key")
+    # The slug only names files, so reduce it to safe characters instead of trusting it.
+    stem = re.sub(r"[^a-z0-9-]", "-", str(response.get("slug", "")).lower()).strip("-")[:64] or "app"
     out_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
-    key_file = write_secret(out_dir / f"{slug}.pem", pem if pem.endswith("\n") else pem + "\n")
-    secret_file = write_secret(out_dir / f"{slug}.webhook-secret", hook + "\n")
-    return {**ids, "slug": slug, "key_file": str(key_file), "webhook_secret_file": str(secret_file)}
+    result = {key: response.get(key) for key in ("id", "client_id", "html_url")}
+    result["slug"] = stem
+    result["key_file"] = str(write_secret(out_dir / f"{stem}.pem", pem if pem.endswith("\n") else pem + "\n"))
+    hook = response.get("webhook_secret")
+    if isinstance(hook, str) and hook:
+        result["webhook_secret_file"] = str(write_secret(out_dir / f"{stem}.webhook-secret", hook + "\n"))
+    else:
+        result["webhook_secret_file"] = None
+        result["warning"] = "GitHub returned no webhook secret: set one with scripts/github-app-webhook"
+    return result
 
 
 def _handler(ctx: dict):
     class Handler(http.server.BaseHTTPRequestHandler):
+        def setup(self) -> None:  # an idle connection must not stall the one-thread server
+            self.timeout = ctx["conn_timeout"]
+            super().setup()
+
         def log_message(self, *args):  # the one-time code is in the request line: keep it out of logs
             pass
 
@@ -155,21 +173,25 @@ def _handler(ctx: dict):
                 return self._send(400, "bad host")
             url = urllib.parse.urlsplit(self.path)
             query = urllib.parse.parse_qs(url.query)
-            if url.path == "/":
+            # Every path carries a secret token: another local user can reach the port, not the token.
+            prefix = f"/{ctx['token']}"
+            if url.path == f"{prefix}/":
                 return self._send(200, page(ctx["manifest"], ctx["owner_url"], ctx["state"]))
-            if url.path != "/callback":
+            if url.path != f"{prefix}/callback":
                 return self._send(404, "not found")
-            if ctx["done"]:
-                return self._send(409, "already handled")
             state = query.get("state", [""])[0]
             if not secrets.compare_digest(state.encode(), ctx["state"].encode()):
                 return self._send(400, "bad state")
             try:
                 code = check(CODE_RE, query.get("code", [""])[0], "code")
                 summary = save(ctx["exchange"](code), ctx["out_dir"])
-            except RegisterError as err:
-                ctx["done"].append(("error", str(err)))
-                return self._send(502, html.escape(f"Registration failed: {err}"))
+            except Exception as err:  # noqa: BLE001 - any failure must end the run, not hang it
+                known = isinstance(err, RegisterError)
+                message = str(err) if known else f"unexpected {type(err).__name__}"
+                if "invalid code" not in message:
+                    message += LOST_KEY_HINT
+                ctx["done"].append(("error", message))
+                return self._send(502, html.escape(f"Registration failed: {message}"))
             ctx["done"].append(("ok", summary))
             self._send(200, "Registered. You can close this tab and return to the terminal.")
 
@@ -177,19 +199,25 @@ def _handler(ctx: dict):
 
 
 def make_server(template, broker_url, org, name, public, out_dir, port, do_exchange):
-    ctx: dict = {"done": []}
+    ctx: dict = {"done": [], "conn_timeout": 10}
     server = http.server.HTTPServer(("127.0.0.1", port), _handler(ctx))
     bound = server.server_address[1]
     try:
+        token = secrets.token_urlsafe(24)
         ctx.update(
             state=secrets.token_urlsafe(24),
+            token=token,
             port=bound,
             out_dir=Path(out_dir),
             owner_url=owner_url(org),
             exchange=do_exchange,
-            manifest=build_manifest(template, broker_url, f"http://127.0.0.1:{bound}/callback", name, public),
+            manifest=build_manifest(template, broker_url, f"http://127.0.0.1:{bound}/{token}/callback", name, public),
         )
-    except RegisterError:
+        # Fail now, not after GitHub has spent the one-time code.
+        ctx["out_dir"].mkdir(parents=True, mode=0o700, exist_ok=True)
+        if not os.access(ctx["out_dir"], os.W_OK | os.X_OK):
+            raise RegisterError(f"cannot write to {ctx['out_dir']}")
+    except (RegisterError, OSError):
         server.server_close()
         raise
     return server, ctx
@@ -202,7 +230,7 @@ def serve(server, ctx: dict, timeout: float) -> None:
         server.handle_request()
 
 
-def main(argv=None) -> int:
+def main(argv=None, do_exchange=exchange) -> int:
     template = json.loads(TEMPLATE.read_text())
     parser = argparse.ArgumentParser(description="Register a GitHub App with the manifest flow.")
     parser.add_argument("--broker-url", default=DEFAULT_BROKER, help=f"base URL of the broker (default {DEFAULT_BROKER})")
@@ -215,11 +243,11 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         server, ctx = make_server(template, args.broker_url, args.org, args.name, args.public,
-                                  args.out_dir, args.port, exchange)
+                                  args.out_dir, args.port, do_exchange)
     except (RegisterError, OSError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
-    print(f"Open http://127.0.0.1:{ctx['port']}/ in your browser and click Create GitHub App.")
+    print(f"Open http://127.0.0.1:{ctx['port']}/{ctx['token']}/ in your browser and click Create GitHub App.", flush=True)
     print(f"Broker URL: {args.broker_url} (webhook and setup URLs are derived from it)")
     serve(server, ctx, args.timeout)
     server.server_close()
@@ -232,6 +260,8 @@ def main(argv=None) -> int:
         return 1
     for key in ("id", "client_id", "slug", "html_url", "key_file", "webhook_secret_file"):
         print(f"{key}: {result[key]}")
+    if "warning" in result:
+        print(f"warning: {result['warning']}", file=sys.stderr)
     return 0
 
 
