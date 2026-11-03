@@ -71,7 +71,8 @@ GH_TOKEN=$TOKEN gh api -X DELETE /installation/token
 | Suite | Runs | Covers |
 |-------|------|--------|
 | `tests/test-github-app-token.sh` | CI (`Merge gate`) and locally. Offline, fake `curl` | JWT claims and signature, exact read and write request bodies, curl hardening, hostile inputs, key-file modes and symlinks, upstream failure modes, no secret in argv, xtrace or `TMPDIR` |
-| `tests/acceptance-live.sh` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: install scope is exactly `sandy` and `credential-broker`; a read token reads and cannot write; a write token writes to its repo only; no permission outside the ceiling; early revoke returns 401 |
+| `tests/test-acceptance-live.sh` | CI and locally. Runs the live suite against a fake GitHub | An honest fake passes; a wrong install, an over-wide App, a read token that can write and a failing revoke each fail the suite; the suite leaves no branch and revokes every token |
+| `tests/acceptance-live.sh` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: the install is "Only select repositories" and reaches exactly `sandy` and `credential-broker`; the App permissions equal the ceiling; a read token reads and cannot write; a write token writes to its repo only; early revoke returns 401 |
 
 The live suite creates and deletes one branch `acceptance/<time>-<pid>` on `credential-broker`.
 It stays out of CI because the key must never be there.
