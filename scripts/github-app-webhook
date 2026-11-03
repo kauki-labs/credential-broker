@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Operator-side: show or set the webhook URL and secret of the `external actor` GitHub App,
+# through PATCH/GET /app/hook/config. This API changes only the URL, secret, content type and TLS
+# check. GitHub has no API for the Active flag or the event list: set those in the App settings.
+#
+# usage: github-app-webhook show
+#        github-app-webhook set <url>
+# env:   GH_APP_ID                  app client id (or app id)
+#        GH_APP_KEY_FILE            app private key PEM, mode 0600 or 0400
+#        GH_APP_WEBHOOK_SECRET_FILE (set only) one-line secret, 16+ printable characters, mode 0600 or 0400
+#
+# The secret is read from a file and goes to curl in a 0600 file in a private temp dir, removed on
+# exit, never on argv. Prints the URL GitHub now holds (set) or the non-secret settings (show).
+set -euo pipefail
+# A hostile environment must not turn on tracing: xtrace would print the JWT to stderr.
+set +o xtrace
+here=${BASH_SOURCE[0]%/*}; [ "$here" != "${BASH_SOURCE[0]}" ] || here=.
+# shellcheck source=lib-app-jwt.sh
+. "$here/lib-app-jwt.sh"
+
+usage() { echo "usage: github-app-webhook show | set <url>" >&2; exit 2; }
+cmd=${1:-}
+case "$cmd" in
+  show) [ "$#" -eq 1 ] || usage ;;
+  set)  [ "$#" -eq 2 ] || usage; url=$2 ;;
+  *)    usage ;;
+esac
+
+: "${GH_APP_ID:?set GH_APP_ID}"
+: "${GH_APP_KEY_FILE:?set GH_APP_KEY_FILE}"
+[[ $GH_APP_ID =~ ^[A-Za-z0-9._-]+$ ]] || { echo "GH_APP_ID has unexpected characters" >&2; exit 2; }
+require_private_file "$GH_APP_KEY_FILE" "key file"
+
+method=GET
+curl_body=()
+if [ "$cmd" = set ]; then
+  : "${GH_APP_WEBHOOK_SECRET_FILE:?set GH_APP_WEBHOOK_SECRET_FILE}"
+  [[ $url =~ ^https?://[A-Za-z0-9._~:/?#@!$\&\(\)*+,\;=%-]+$ ]] || { echo "invalid webhook URL" >&2; exit 2; }
+  require_private_file "$GH_APP_WEBHOOK_SECRET_FILE" "secret file"
+  [ "$(grep -c '' "$GH_APP_WEBHOOK_SECRET_FILE")" = 1 ] && grep -Eq '^[[:graph:]]{16,}$' "$GH_APP_WEBHOOK_SECRET_FILE" \
+    || { echo "secret file must hold one line of 16 or more printable characters" >&2; exit 2; }
+  work=$(umask 077; mktemp -d)
+  trap 'rm -rf "$work"' EXIT
+  (umask 077; jq -cn --arg url "$url" --rawfile s "$GH_APP_WEBHOOK_SECRET_FILE" \
+    '{url: $url, content_type: "json", insecure_ssl: "0", secret: ($s | rtrimstr("\n"))}' > "$work/body")
+  method=PATCH
+  curl_body=(-d "@$work/body")
+fi
+
+jwt=$(app_jwt)
+
+# The JWT goes to curl on stdin (-H @-), never on argv or in a file. -q must be the first argument:
+# it skips ~/.curlrc and CURL_HOME config.
+if ! resp=$(printf 'Authorization: Bearer %s\n' "$jwt" | curl -q -sS --fail-with-body \
+  --proto '=https' --tlsv1.2 --noproxy '*' -X "$method" -H @- \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  ${curl_body[@]+"${curl_body[@]}"} \
+  "https://api.github.com/app/hook/config"); then
+  printf 'GitHub request failed: %s\n' "$resp" >&2
+  exit 1
+fi
+
+# Print only non-secret fields; GitHub masks the secret in its answer, and it is not echoed here.
+if [ "$cmd" = set ]; then
+  printf '%s' "$resp" | jq -er '.url // empty' || { echo "no webhook URL in GitHub's response" >&2; exit 1; }
+  case "$url" in
+    http://localhost*|https://localhost*|http://127.*|http://\[::1\]*)
+      echo "note: GitHub cannot reach a localhost URL; put a tunnel or a public host in front of it" >&2 ;;
+  esac
+else
+  printf '%s' "$resp" | jq -ce '{url, content_type, insecure_ssl}' || { echo "unexpected response from GitHub" >&2; exit 1; }
+fi

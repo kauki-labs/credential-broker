@@ -18,6 +18,9 @@
 set -euo pipefail
 # A hostile environment must not turn on tracing: xtrace would print the JWT to stderr.
 set +o xtrace
+here=${BASH_SOURCE[0]%/*}; [ "$here" != "${BASH_SOURCE[0]}" ] || here=.
+# shellcheck source=lib-app-jwt.sh
+. "$here/lib-app-jwt.sh"
 
 # Defence in depth next to the install scope: names outside this list are refused here.
 allowed_repos=(sandy credential-broker)
@@ -51,22 +54,8 @@ for repo in "${repos[@]}"; do
   [ "$ok" = 1 ] || { echo "repository not in the allowlist: $repo" >&2; exit 2; }
 done
 
-[ -f "$GH_APP_KEY_FILE" ] || { echo "key file not found: $GH_APP_KEY_FILE" >&2; exit 1; }
-# GNU stat first: on a nix-provided GNU stat, `-f` means filesystem status, not format.
-# -L follows a symlink so a link to a 0600 file (sops, home-manager) is judged by its target.
-kmode=$(stat -L -c '%a' "$GH_APP_KEY_FILE" 2>/dev/null || stat -L -f '%Lp' "$GH_APP_KEY_FILE")
-case "$kmode" in 400|600) ;; *) echo "refusing: $GH_APP_KEY_FILE has mode $kmode, want 600 or 400" >&2; exit 1 ;; esac
-
-b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-
-now=$(date +%s)
-header='{"alg":"RS256","typ":"JWT"}'
-# iat 60 s in the past for clock drift, exp inside GitHub's 10 minute maximum.
-payload=$(jq -cn --arg iss "$GH_APP_ID" --argjson iat "$((now - 60))" --argjson exp "$((now + 540))" \
-  '{iat: $iat, exp: $exp, iss: $iss}')
-signing_input="$(printf '%s' "$header" | b64url).$(printf '%s' "$payload" | b64url)"
-signature=$(printf '%s' "$signing_input" | openssl dgst -sha256 -sign "$GH_APP_KEY_FILE" | b64url)
-jwt="$signing_input.$signature"
+require_private_file "$GH_APP_KEY_FILE" "key file"
+jwt=$(app_jwt)
 
 if [ "$mode" = write ]; then level="write"; else level="read"; fi
 body=$(jq -cn --arg level "$level" '$ARGS.positional as $r | {

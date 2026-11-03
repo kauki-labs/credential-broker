@@ -8,11 +8,11 @@ moves the key into OpenBao and replaces the script (see the
 
 | Item | Value |
 |------|-------|
-| App name | `external actor` (acts as `external-actor[bot]`). `external` is the short name used for it in this repo; the name `external` was not available on GitHub |
-| Owner | `kauki-labs` (org). A private App installs only on its own owner |
+| App name | `external actor` (acts as `external-actor[bot]`, slug to be confirmed in the App settings). `external` is the short name used for it in this repo; the name `external` was not available on GitHub |
+| Owner | The operator's personal account. The App is public, so it installs on `kauki-labs` and on the personal account. A private App installs only on its owner |
 | Permissions (ceiling) | `metadata` read; `contents`, `pull_requests`, `issues` write |
 | Manifest | [`apps/external.kauki-labs.manifest.json`](../../apps/external.kauki-labs.manifest.json) |
-| Install scope | `sandy`, `credential-broker`. Set in `tf/cloud/02-github/external_app.tf` in `kauki-labs/infra` and in the script's allowlist. Change both together |
+| Install scope | On `kauki-labs`: `sandy`, `credential-broker`. Set in `tf/cloud/02-github/external_app.tf` in `kauki-labs/infra` and in the script's allowlist. Change both together. The personal-account install is managed in the GitHub UI |
 | Installation id | `TF_VAR_external_installation_id_kauki_labs` in infra's `tf/cloud/secrets.yaml` |
 
 ## Register the App (once)
@@ -23,7 +23,7 @@ from an empty temporary directory, never from a repository.
 1. Add `"redirect_url": "http://localhost:8080/"` to a copy of the manifest. Start the catcher
    bound to loopback: `cd "$(mktemp -d)" && python3 -m http.server 8080 --bind 127.0.0.1`.
 2. POST the manifest as the form field `manifest` to
-   `https://github.com/organizations/kauki-labs/settings/apps/new?state=external`.
+   `https://github.com/settings/apps/new?state=external` (or the organization's `.../settings/apps/new` URL to make the org the owner).
 3. Click **Create GitHub App**. Copy the `code` from the redirect URL (valid about 1 hour).
 4. Exchange it without printing the secrets. The response holds the private key, a client
    secret and a webhook secret:
@@ -37,13 +37,58 @@ from an empty temporary directory, never from a repository.
    jq '{id, client_id, html_url}' "$d/resp.json"   # only the non-secret ids
    rm -rf "$d"
    ```
-5. Install the App on `kauki-labs` with **Only select repositories** (required, not "All
-   repositories"): `sandy` and `credential-broker`. The installation id is in the install
+5. Install the App from `https://github.com/apps/<slug>`. On `kauki-labs` choose **Only select
+   repositories** (required, not "All repositories"): `sandy` and `credential-broker`. Repeat for
+   the personal account with the repos you want. Each installation has its own id, in the install
    settings URL (`.../settings/installations/<ID>`).
 6. Save the `.pem` and ids in KeePass, entry `Infrastructure/Credentials/external app private key`.
    Put the installation id in infra's `tf/cloud/secrets.yaml` as
    `TF_VAR_external_installation_id_kauki_labs`, then apply `tf/cloud/02-github` there.
 7. Run the live acceptance suite (below). It checks the install scope and the permission split.
+
+## App settings sheet
+
+Values for the App's **General** page, for an App that already exists. The manifest carries the
+same values for a fresh registration.
+
+| Field | Value |
+|-------|-------|
+| GitHub App name | `external actor` |
+| Description | Connects GitHub to a credential broker. Sends install and repository events to the broker and lets it mint short-lived, narrowly scoped installation tokens for external agents. The broker address is set after installation and defaults to localhost. |
+| Homepage URL | `https://github.com/kauki-labs/credential-broker` |
+| Callback URL, user authorization during install, device flow | empty and off. The App acts as itself, never as a user |
+| Setup URL | `http://localhost:8080/github/setup` |
+| Redirect on update | on |
+| Webhook: Active | on |
+| Webhook URL | `http://localhost:8080/github/webhook` (set with `scripts/github-app-webhook`, below) |
+| Webhook secret | set with `scripts/github-app-webhook`, never typed into a form you screenshot |
+| SSL verification | enabled |
+| Repository permissions | Contents, Issues, Pull requests: read and write. Metadata: read-only. Nothing else |
+| Organization and account permissions | none |
+| Subscribe to events | Issues, Issue comment, Pull request, Pull request review, Push, Create, Delete. `installation` and `installation_repositories` arrive without a subscription |
+| Where can this GitHub App be installed? | Any account (the label is at the bottom of General; if it is not there, look under Advanced) |
+
+## Webhook and broker endpoint
+
+The App holds exactly two broker addresses, the webhook URL and the setup URL. Both default to
+`localhost:8080`. The broker's own address and settings live in the broker, not in GitHub, so
+pointing the App at a broker is two changes, and nothing else in the App depends on it.
+
+GitHub's servers cannot reach `localhost`. Until the broker has a public host or a tunnel in
+front of it (for example smee.io), deliveries fail and show up under the App's Advanced tab.
+That is harmless.
+
+```sh
+export GH_APP_ID=<client id> GH_APP_KEY_FILE=~/.config/kauki/external-actor.pem
+export GH_APP_WEBHOOK_SECRET_FILE=~/.config/kauki/external-actor.webhook-secret   # one line, 16+ characters, mode 0600
+scripts/github-app-webhook set http://localhost:8080/github/webhook
+scripts/github-app-webhook show
+```
+
+The API changes only the webhook URL and secret. The Active flag, the event list and the Setup
+URL are UI-only. To move to a real broker, run `set` with the new URL and change the Setup URL in
+the App's General page. The receiver must check `X-Hub-Signature-256` against the secret and must
+only record events, never act on them with the App's write ceiling.
 
 ## Get a token (operator side)
 
@@ -71,6 +116,7 @@ GH_TOKEN=$TOKEN gh api -X DELETE /installation/token
 | Suite | Runs | Covers |
 |-------|------|--------|
 | `tests/test-github-app-token.sh` | CI (`Merge gate`) and locally. Offline, fake `curl` | JWT claims and signature, exact read and write request bodies, curl hardening, hostile inputs, key-file modes and symlinks, upstream failure modes, no secret in argv, xtrace or `TMPDIR` |
+| `tests/test-github-app-webhook.sh` | CI and locally. Offline, fake `curl` | JWT, exact PATCH body, secret never on argv or in output, body file mode and cleanup, URL and secret validation, key and secret file modes, upstream failures, xtrace |
 | `tests/test-acceptance-live.sh` | CI and locally. Runs the live suite against a fake GitHub | An honest fake passes; a wrong install, an over-wide App, a read token that can write and a failing revoke each fail the suite; the suite leaves no branch and revokes every token |
 | `tests/acceptance-live.sh` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: the install is "Only select repositories" and reaches exactly `sandy` and `credential-broker`; the App permissions equal the ceiling; a read token reads and cannot write; a write token writes to its repo only; early revoke returns 401 |
 
