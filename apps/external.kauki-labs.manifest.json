@@ -1,14 +1,8 @@
 {
   "name": "external actor",
   "url": "https://github.com/kauki-labs/credential-broker",
-  "description": "Connects GitHub to a credential broker. Sends install and repository events to the broker and lets it mint short-lived, narrowly scoped installation tokens for external agents. The broker address is set after installation and defaults to localhost.",
-  "public": true,
-  "hook_attributes": {
-    "url": "http://localhost:8080/github/webhook",
-    "active": true
-  },
-  "setup_url": "http://localhost:8080/github/setup",
-  "setup_on_update": true,
+  "description": "Connects GitHub to a credential broker. Sends install and repository events to the broker and lets it mint short-lived, narrowly scoped installation tokens for external agents. The broker address is set after installation.",
+  "public": false,
   "default_events": [
     "issues",
     "issue_comment",

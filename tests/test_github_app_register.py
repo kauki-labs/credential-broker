@@ -43,18 +43,36 @@ class Manifest(unittest.TestCase):
     def build(self, broker="http://localhost:8080", name="external actor", public=False):
         return reg.build_manifest(TEMPLATE, broker, "http://127.0.0.1:9/callback", name, public)
 
-    def test_urls_derive_from_the_broker_url(self):
+    def test_urls_derive_from_a_public_broker_url(self):
         m = self.build("https://broker.example.org/")
         self.assertEqual(m["hook_attributes"], {"url": "https://broker.example.org/github/webhook", "active": True})
         self.assertEqual(m["setup_url"], "https://broker.example.org/github/setup")
+        self.assertIs(m["setup_on_update"], True)
+        self.assertEqual(m["default_events"], TEMPLATE["default_events"])
 
-    def test_default_points_at_localhost(self):
-        self.assertEqual(self.build()["hook_attributes"]["url"], "http://localhost:8080/github/webhook")
+    def test_a_local_broker_url_registers_without_webhook_events_or_setup_url(self):
+        # GitHub's form refuses a webhook URL that is not reachable over the public Internet.
+        for broker in ("http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080", "http://10.0.0.5",
+                       "http://192.168.1.2:80", "http://broker", "http://broker.local", "https://x.localhost",
+                       "http://169.254.1.1", "http://0.0.0.0", "https://broker.internal", "https://a.home.arpa"):
+            m = self.build(broker)
+            for key in ("hook_attributes", "default_events", "setup_url", "setup_on_update"):
+                self.assertNotIn(key, m, f"{broker}: {key}")
+            self.assertEqual(m["default_permissions"], TEMPLATE["default_permissions"], broker)
+
+    def test_a_public_name_or_address_keeps_the_webhook(self):
+        for broker in ("https://broker.example.org", "http://8.8.8.8:9000", "https://a.b.example.com/x"):
+            self.assertIn("hook_attributes", self.build(broker), broker)
+
+    def test_the_template_alone_is_safe_to_register(self):
+        for key in ("hook_attributes", "setup_url"):
+            self.assertNotIn(key, TEMPLATE)
 
     def test_template_fields_carry_over_and_the_template_is_untouched(self):
         before = json.dumps(TEMPLATE, sort_keys=True)
         m = self.build()
-        for key in ("url", "description", "default_events", "default_permissions", "setup_on_update"):
+        m = self.build("https://broker.example.org")
+        for key in ("url", "description", "default_events", "default_permissions"):
             self.assertEqual(m[key], TEMPLATE[key])
         self.assertEqual(json.dumps(TEMPLATE, sort_keys=True), before)
 

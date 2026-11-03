@@ -53,7 +53,7 @@ Each installer owns their own App and key (see the
 so there is no form to POST and no code to race:
 
 ```sh
-scripts/github-app-register                                   # personal account, broker at http://localhost:8080
+scripts/github-app-register                                   # personal account, no webhook yet (broker at localhost)
 scripts/github-app-register --org my-org --broker-url https://broker.example.org
 scripts/github-app-register --public                          # installable on other accounts too
 ```
@@ -66,8 +66,14 @@ problem with any other field cannot lose it. It serves on loopback only, behind 
 the URL path, and checks a random `state` value and the `Host` header. Other users on a shared
 machine can reach the port but not the token. It discards the client secret. If the run fails after
 GitHub has created the App, the App exists without a saved key: open its settings and generate a
-new key, or delete it. The webhook and Setup URLs come from `--broker-url`; to
-change them later use `scripts/github-app-webhook` and the App's General page. Then install the App
+new key, or delete it.
+
+GitHub's form refuses a webhook URL that is not reachable over the public Internet ("Hook url is not
+supported because it isn't reachable over the public Internet (localhost)"). So with the default
+broker URL `http://localhost:8080`, or any loopback, private or `.local` address, the helper registers
+the App **without a webhook, events or Setup URL**. With a public `--broker-url` it sets the
+webhook to `<url>/github/webhook`, the Setup URL to `<url>/github/setup` and subscribes the events.
+To add them later, see "Webhook and broker endpoint". Then install the App
 and follow "Get a token" below with the new key and ids. The minter's `allowed_repos` line is fixed
 to `sandy` and `credential-broker`: edit it to your own repository names, or it refuses them.
 
@@ -82,10 +88,10 @@ same values for a fresh registration.
 | Description | Connects GitHub to a credential broker. Sends install and repository events to the broker and lets it mint short-lived, narrowly scoped installation tokens for external agents. The broker address is set after installation and defaults to localhost. |
 | Homepage URL | `https://github.com/kauki-labs/credential-broker` |
 | Callback URL, user authorization during install, device flow | empty and off. The App acts as itself, never as a user |
-| Setup URL | `http://localhost:8080/github/setup` |
+| Setup URL | `<broker URL>/github/setup`, once the broker has a public URL. Leave empty until then |
 | Redirect on update | on |
 | Webhook: Active | on |
-| Webhook URL | `http://localhost:8080/github/webhook` (set with `scripts/github-app-webhook`, below) |
+| Webhook URL | `<broker URL>/github/webhook`, public only (GitHub refuses `localhost`). Set with `scripts/github-app-webhook`, below |
 | Webhook secret | set with `scripts/github-app-webhook`, never typed into a form you screenshot |
 | SSL verification | enabled |
 | Repository permissions | Contents, Issues, Pull requests: read and write. Metadata: read-only. Nothing else |
@@ -95,18 +101,23 @@ same values for a fresh registration.
 
 ## Webhook and broker endpoint
 
-The App holds exactly two broker addresses, the webhook URL and the setup URL. Both default to
-`localhost:8080`. The broker's own address and settings live in the broker, not in GitHub, so
-pointing the App at a broker is two changes, and nothing else in the App depends on it.
+The App holds exactly two broker addresses, the webhook URL and the Setup URL. The broker's own
+address and settings live in the broker, not in GitHub, so pointing the App at a broker is two
+changes, and nothing else in the App depends on it.
 
-GitHub's servers cannot reach `localhost`. Until the broker has a public host or a tunnel in
-front of it (for example smee.io), deliveries fail and show up under the App's Advanced tab.
-That is harmless.
+Both must be public: GitHub refuses a `localhost` webhook URL, and its servers could not deliver to
+it anyway. Until the broker has a public host or a tunnel in front of it (for example smee.io), the
+App has no webhook. Once it does:
+
+1. In the App settings, General, tick **Webhook: Active** and set the Setup URL.
+2. Under Permissions & events, subscribe to the events (issues, issue comment, pull request, pull
+   request review, push, create, delete).
+3. Set the URL and secret with the script. It uses the secret file the helper wrote.
 
 ```sh
 export GH_APP_ID=<client id> GH_APP_KEY_FILE=~/.config/kauki/external-actor.pem
 export GH_APP_WEBHOOK_SECRET_FILE=~/.config/kauki/external-actor.webhook-secret   # one line, 16+ characters, mode 0600
-scripts/github-app-webhook set http://localhost:8080/github/webhook
+scripts/github-app-webhook set https://broker.example.org/github/webhook
 scripts/github-app-webhook show
 ```
 

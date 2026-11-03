@@ -14,8 +14,9 @@ owner alone can use it.
 
 **Decision.** There is no shared App and no shared key. Every installer registers their own App
 through GitHub's manifest flow, driven by `scripts/github-app-register`. The broker URL is an input
-to that registration and defaults to `localhost`: it sets the webhook URL and the Setup URL in the
-manifest. The installer owns the App, holds its key, and runs their own broker. The App built for
+to that registration and defaults to `localhost`. A public URL sets the webhook, the Setup URL and the
+events in the manifest. GitHub refuses a non-public webhook URL, so a `localhost` URL registers the App
+without them, to be added once the broker has a public address. The installer owns the App, holds its key, and runs their own broker. The App built for
 the maintainer's accounts is one such App.
 
 **Consequences.**

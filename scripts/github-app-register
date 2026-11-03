@@ -19,6 +19,7 @@ import argparse
 import html
 import http.client
 import http.server
+import ipaddress
 import json
 import os
 import re
@@ -34,7 +35,7 @@ GITHUB = "https://github.com"
 API = "https://api.github.com"
 DEFAULT_BROKER = "http://localhost:8080"
 TEMPLATE = Path(__file__).resolve().parent.parent / "apps" / "external.kauki-labs.manifest.json"
-URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+")
+URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%\[\]-]+")
 ORG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,33}")
 SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
@@ -56,16 +57,33 @@ def check(regex: re.Pattern[str], value: object, what: str) -> str:
     return value
 
 
+LOCAL_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
+
+
+def is_public_url(url: str) -> bool:
+    """True when GitHub could plausibly reach the URL. GitHub's form refuses a webhook URL that is
+    not reachable over the public Internet ("Hook url is not supported ... (localhost)")."""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        return "." in host and not host.endswith(LOCAL_SUFFIXES)
+
+
 def build_manifest(template: dict, broker_url: str, redirect_url: str, name: str, public: bool) -> dict:
     base = check(URL_RE, broker_url, "broker URL").rstrip("/")
     manifest = dict(template)
-    manifest.update(
-        name=check(NAME_RE, name, "app name"),
-        public=public,
-        redirect_url=redirect_url,
-        setup_url=f"{base}/github/setup",
-        hook_attributes={"url": f"{base}/github/webhook", "active": True},
-    )
+    manifest.update(name=check(NAME_RE, name, "app name"), public=public, redirect_url=redirect_url)
+    if is_public_url(base):
+        manifest.update(
+            setup_url=f"{base}/github/setup",
+            setup_on_update=True,
+            hook_attributes={"url": f"{base}/github/webhook", "active": True},
+        )
+    else:
+        # No webhook, events or Setup URL until there is a public address: add them later.
+        for key in ("hook_attributes", "default_events", "setup_url", "setup_on_update"):
+            manifest.pop(key, None)
     return manifest
 
 
@@ -81,7 +99,7 @@ def page(manifest: dict, target: str, state: str) -> str:
         f'<form method="post" action="{html.escape(target)}?state={state}">'
         f'<input type="hidden" name="manifest" value="{html.escape(json.dumps(manifest), quote=True)}">'
         f"<p>Create the GitHub App <b>{html.escape(manifest['name'])}</b>. "
-        f"Webhook: {html.escape(manifest['hook_attributes']['url'])}</p>"
+        f"Webhook: {html.escape(manifest.get('hook_attributes', {}).get('url', 'none (the broker URL is not public)'))}</p>"
         "<button>Create GitHub App</button></form>"
     )
 
@@ -248,7 +266,11 @@ def main(argv=None, do_exchange=exchange) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
     print(f"Open http://127.0.0.1:{ctx['port']}/{ctx['token']}/ in your browser and click Create GitHub App.", flush=True)
-    print(f"Broker URL: {args.broker_url} (webhook and setup URLs are derived from it)")
+    if is_public_url(args.broker_url):
+        print(f"Broker URL: {args.broker_url} (the webhook and Setup URLs are derived from it)")
+    else:
+        print(f"Broker URL: {args.broker_url} is not publicly reachable, so GitHub would refuse it as a webhook.")
+        print("Registering without a webhook, events or Setup URL; add them once the broker has a public address.")
     serve(server, ctx, args.timeout)
     server.server_close()
     if not ctx["done"]:
