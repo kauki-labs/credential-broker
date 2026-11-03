@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Security fixes come from Dependabot security updates (enabled in repo settings, managed in
+  # kauki-labs/infra). This file covers the weekly version updates. Add a package ecosystem
+  # here when the first code lands.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "UTC"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
