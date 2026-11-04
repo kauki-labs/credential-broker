@@ -143,6 +143,7 @@ class Exchange(unittest.TestCase):
 
     def test_a_404_is_reported_not_raised_raw(self):
         err = urllib.error.HTTPError("u", 404, "nf", {}, _Resp('{"message":"Not Found"}'))
+        self.addCleanup(err.close)  # an unclosed HTTPError warns at garbage collection
         urlopen, _ = self.opener(error=err)
         with self.assertRaisesRegex(reg.RegisterError, "HTTP 404"):
             reg.exchange(CODE, urlopen)

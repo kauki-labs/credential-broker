@@ -59,15 +59,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Lint the shell scripts
-        run: shellcheck --severity=warning -x scripts/github-app-token scripts/github-app-webhook scripts/lib-app-jwt.sh tests/test-github-app-token.sh tests/test-github-app-webhook.sh tests/acceptance-live.sh tests/test-acceptance-live.sh
-      - name: Run the offline acceptance tests
-        run: bash tests/test-github-app-token.sh
-      - name: Run the registration helper tests
-        run: python3 -W error -I tests/test_github_app_register.py
-      - name: Run the webhook script tests
-        run: bash tests/test-github-app-webhook.sh
-      - name: Run the live suite against a fake GitHub
-        run: bash tests/test-acceptance-live.sh
+        run: shellcheck --severity=warning -x scripts/github-app-token scripts/github-app-webhook scripts/lib-app-jwt.sh
+      - name: Run the offline suites
+        run: python3 -B -W error -I -m unittest discover -s tests -v
   # Single aggregate merge gate: green only if every other job in this run succeeded. Mark THIS
   # one as the required check in the ruleset, so adding or renaming a job never needs a ruleset
   # change. validate-pr-title only runs on pull_request, so it may skip on merge_group.

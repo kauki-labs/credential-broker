@@ -151,11 +151,13 @@ GH_TOKEN=$TOKEN gh api -X DELETE /installation/token
 
 | Suite | Runs | Covers |
 |-------|------|--------|
-| `tests/test-github-app-token.sh` | CI (`Merge gate`) and locally. Offline, fake `curl` | JWT claims and signature, exact read and write request bodies, curl hardening, hostile inputs, key-file modes and symlinks, upstream failure modes, no secret in argv, xtrace or `TMPDIR` |
-| `tests/test-github-app-webhook.sh` | CI and locally. Offline, fake `curl` | JWT, exact PATCH body, secret never on argv or in output, body file mode and cleanup, URL and secret validation, key and secret file modes, upstream failures, xtrace |
+| `tests/test_github_app_token.py` | CI and locally. Offline, fake `curl` | JWT claims and signature, exact read and write request bodies, curl hardening, hostile inputs, key-file modes and symlinks, upstream failure modes, no secret in argv, xtrace or `TMPDIR` |
+| `tests/test_github_app_webhook.py` | CI and locally. Offline, fake `curl` | JWT, exact PATCH body, secret never on argv or in output, body file mode and cleanup, URL and secret validation, key and secret file modes, upstream failures, xtrace |
 | `tests/test_github_app_register.py` | CI and locally. Offline, injected exchange, real loopback sockets | Manifest fields and permissions, hostile inputs, form round trip, secret path token, state and Host checks, one-shot callback that ends the run on any failure, the key written first, idle connections, files at 0600, no overwrite or symlink follow, no secret in output |
-| `tests/test-acceptance-live.sh` | CI and locally. Runs the live suite against a fake GitHub | An honest fake passes; a wrong install, an over-wide App, a read token that can write and a failing revoke each fail the suite; the suite leaves no branch and revokes every token |
-| `tests/acceptance-live.sh` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: the install is "Only select repositories" and reaches exactly `sandy` and `credential-broker`; the App permissions equal the ceiling; a read token reads and cannot write; a write token writes to its repo only; early revoke returns 401 |
+| `tests/test_acceptance_live.py` | CI and locally. Runs the live suite against a fake GitHub | An honest fake passes; a public sibling repo skips the private check; a wrong install, an over-wide App, a read token that can write and a failing revoke each fail the suite; the suite leaves no branch and revokes every token; it refuses to run without `ACCEPT_LIVE=1` |
+| `tests/acceptance_live.py` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: the install is "Only select repositories" and reaches exactly `sandy` and `credential-broker`; the App permissions equal the ceiling; a read token reads and cannot write; a write token writes to its repo only; early revoke returns 401 |
+
+Run every offline suite with `nix run .#tests` from the repo root. Run the live suite with `ACCEPT_LIVE=1 python3 -I tests/acceptance_live.py` (add `-v` for one line per check).
 
 The live suite creates and deletes one branch `acceptance/<time>-<pid>` on `credential-broker`.
 It stays out of CI because the key must never be there.

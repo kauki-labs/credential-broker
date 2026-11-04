@@ -20,5 +20,5 @@ holds the GitHub App keys so runners never do. Pre-service: the design is docs; 
 - Branches: `<nick>/<type>/<component>/<description>`. Titles: Conventional Commits (CI checks).
 - Never push to `main`. Open a PR; the merge stays with the maintainer.
 - Run `python3 scripts/validate_docs.py .` before a PR that touches `docs/` or `AGENTS.md`.
-- Run `for t in tests/test-*.sh; do bash "$t"; done` and `python3 -I tests/test_github_app_register.py` before a PR that touches `scripts/`. `tests/acceptance-live.sh` is operator-only (needs the App key); CI never runs it.
+- Run `nix run .#tests` (shellcheck plus every offline suite in `tests/`) before a PR that touches `scripts/` or `tests/`. `tests/acceptance_live.py` is operator-only (needs the App key); CI never runs it.
 - Infra (the GitHub App registrations, OpenBao, deployment) lives in `kauki-labs/infra`, not here.
