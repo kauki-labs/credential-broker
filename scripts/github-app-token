@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# TEMPORARY operator-side GitHub App token minter for the `external` app, until the credential
+# broker (kauki-labs/credential-broker, spec Block 1) signs through OpenBao. The app private
+# key sits in a 0600 file under the OPERATOR's uid. Run this yourself and hand the token to an
+# agent: an agent that can run this script as the key's uid can also just read the key.
+# Prints one installation token on stdout and nothing else.
+#
+# usage: github-app-token [--write] <repo> [<repo>...]    (bare repo names, in the allowlist below)
+#   default   read:  contents, pull_requests, issues read + metadata read
+#   --write   write: contents, pull_requests, issues write + metadata read
+# env:   GH_APP_ID               app client id (or app id)
+#        GH_APP_KEY_FILE         path to the app private key PEM, mode 0600 or 0400
+#        GH_APP_INSTALLATION_ID  installation id from the install settings URL
+#
+# The token lives 1 hour (GitHub fixes this). It is narrowed to the repos given and to the
+# permission set of the chosen profile; GitHub caps it at the installation's repo set and the
+# app's own ceiling. The permission sets are fixed here and not taken from the environment.
+set -euo pipefail
+# A hostile environment must not turn on tracing: xtrace would print the JWT to stderr.
+set +o xtrace
+here=${BASH_SOURCE[0]%/*}; [ "$here" != "${BASH_SOURCE[0]}" ] || here=.
+# shellcheck source=lib-app-jwt.sh
+. "$here/lib-app-jwt.sh"
+
+# Defence in depth next to the install scope: names outside this list are refused here.
+allowed_repos=(sandy credential-broker)
+
+mode="read"
+repos=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --write) mode="write" ;;
+    --) shift; repos+=("$@"); break ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) repos+=("$1") ;;
+  esac
+  shift
+done
+
+: "${GH_APP_ID:?set GH_APP_ID}"
+: "${GH_APP_KEY_FILE:?set GH_APP_KEY_FILE}"
+: "${GH_APP_INSTALLATION_ID:?set GH_APP_INSTALLATION_ID}"
+[ "${#repos[@]}" -ge 1 ] || { echo "usage: github-app-token [--write] <repo> [<repo>...]" >&2; exit 2; }
+
+# The ids go into a URL and a claim, the repo names into the request body: allow only the
+# characters GitHub itself allows, so nothing can break out of either.
+[[ $GH_APP_ID =~ ^[A-Za-z0-9._-]+$ ]] || { echo "GH_APP_ID has unexpected characters" >&2; exit 2; }
+[[ $GH_APP_INSTALLATION_ID =~ ^[0-9]+$ ]] || { echo "GH_APP_INSTALLATION_ID must be numeric" >&2; exit 2; }
+for repo in "${repos[@]}"; do
+  [[ $repo =~ ^[A-Za-z0-9._-]+$ && $repo != . && $repo != .. && $repo != -* ]] \
+    || { echo "invalid repository name: bare names only (no owner, no slash)" >&2; exit 2; }
+  ok=0
+  for a in "${allowed_repos[@]}"; do [ "$repo" = "$a" ] && ok=1; done
+  [ "$ok" = 1 ] || { echo "repository not in the allowlist: $repo" >&2; exit 2; }
+done
+
+require_private_file "$GH_APP_KEY_FILE" "key file"
+jwt=$(app_jwt)
+
+if [ "$mode" = write ]; then level="write"; else level="read"; fi
+body=$(jq -cn --arg level "$level" '$ARGS.positional as $r | {
+  repositories: $r,
+  permissions: {contents: $level, pull_requests: $level, issues: $level, metadata: "read"}
+}' --args "${repos[@]}")
+
+# The JWT goes to curl on stdin (-H @-), never on argv or in a file, so it shows in neither
+# `ps` nor $TMPDIR. -q must be the first argument: it skips ~/.curlrc and CURL_HOME config.
+if ! resp=$(printf 'Authorization: Bearer %s\n' "$jwt" | curl -q -sS --fail-with-body \
+  --proto '=https' --tlsv1.2 --noproxy '*' -X POST -H @- \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app/installations/${GH_APP_INSTALLATION_ID}/access_tokens" \
+  -d "$body"); then
+  # GitHub's error body (for example a 422 naming the repo) holds no secret and helps the operator.
+  printf 'GitHub request failed: %s\n' "$resp" >&2
+  exit 1
+fi
+
+# Print only a well-formed token; on anything else say so on stderr and print nothing.
+token=$(printf '%s' "$resp" | jq -er '.token // empty') \
+  && [[ $token =~ ^[A-Za-z0-9_.-]+$ ]] \
+  || { echo "no usable token in GitHub's response" >&2; exit 1; }
+printf '%s\n' "$token"

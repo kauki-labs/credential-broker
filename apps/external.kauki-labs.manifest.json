@@ -1,0 +1,21 @@
+{
+  "name": "external actor",
+  "url": "https://github.com/kauki-labs/credential-broker",
+  "description": "Connects GitHub to a credential broker. Sends install and repository events to the broker and lets it mint short-lived, narrowly scoped installation tokens for external agents. The broker address is set after installation.",
+  "public": false,
+  "default_events": [
+    "issues",
+    "issue_comment",
+    "pull_request",
+    "pull_request_review",
+    "push",
+    "create",
+    "delete"
+  ],
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "write",
+    "pull_requests": "write",
+    "issues": "write"
+  }
+}
