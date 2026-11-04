@@ -25,6 +25,7 @@
             pkgs.writeShellApplication {
               name = "tests";
               runtimeInputs = with pkgs; [
+                bash
                 coreutils
                 curl
                 jq

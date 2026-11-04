@@ -42,6 +42,8 @@ NOT_FOUND = '{"message":"Not Found"}'
 # Minting: the token name records the profile the minter asked for.
 if method == "POST" and re.fullmatch(r"/app/installations/[^/]+/access_tokens", path):
     body = json.loads(data)
+    if mode == "mint_fail" and body["permissions"]["contents"] == "write":
+        reply(422, '{"message":"Validation Failed"}')
     if body["permissions"]["contents"] == "write":
         t = "ghs_write"
     elif len(body["repositories"]) == 2:

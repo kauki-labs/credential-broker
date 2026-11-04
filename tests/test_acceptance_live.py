@@ -62,6 +62,14 @@ class FakeGitHub(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assert_clean(r, "read_writes")
 
+    def test_a_failed_mint_still_revokes_the_tokens_already_minted(self):
+        # setUpClass raises on the third mint; unittest then skips tearDownClass, class cleanups still run
+        r = self.run_suite("mint_fail")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertRegex(r.stderr, r"(?m)^ERROR:")
+        self.assertEqual(self.revoked(), 2, "tokens minted before the failed mint were left live")
+        self.assertNotIn("ghs_", r.stdout + r.stderr)
+
     def test_refuses_to_run_without_the_opt_in(self):
         r = self.ws.run(SUITE, unset=("ACCEPT_LIVE",))
         self.assertEqual(r.returncode, 2)

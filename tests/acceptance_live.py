@@ -71,12 +71,14 @@ class Live(unittest.TestCase):
     def setUpClass(cls):
         cls.branch = f"acceptance/{int(time.time())}-{os.getpid()}"
         cls.live = {}
-        # minted early so tearDownClass can always remove the branch and revoke the tokens
+        # registered first: unittest skips tearDownClass when setUpClass raises, class cleanups still run
+        cls.addClassCleanup(cls.cleanup)
+        # minted early so the cleanup can always remove the branch and revoke the tokens
         for name, args in (("read_both", (REPO, OTHER)), ("read_one", (REPO,)), ("write", ("--write", REPO))):
             cls.live[name] = mint(*args)
 
     @classmethod
-    def tearDownClass(cls):
+    def cleanup(cls):
         # best effort, on success and on failure: delete the throwaway branch, then revoke every token left
         if "write" in cls.live:
             try:
