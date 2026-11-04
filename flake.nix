@@ -16,7 +16,8 @@
         ] (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      # `nix run .#tests` from the repo root: lint the shell scripts, then run every offline suite.
+      # `nix run .#tests` from the repo root: lint the shell scripts, then run every offline suite
+      # with pytest-xdist (extra arguments go to pytest).
       # The live suite (tests/acceptance_live.py) is not here: it needs the real key.
       apps = forAllSystems (pkgs: {
         tests = {
@@ -30,13 +31,16 @@
                 curl
                 jq
                 openssl
-                python3
+                (python3.withPackages (ps: [
+                  ps.pytest
+                  ps.pytest-xdist
+                ]))
                 shellcheck
               ];
               text = ''
                 [ -f scripts/github-app-token ] || { echo "run from the credential-broker repo root" >&2; exit 2; }
                 shellcheck --severity=warning -x scripts/github-app-token scripts/github-app-webhook scripts/lib-app-jwt.sh
-                python3 -B -W error -I -m unittest discover -s tests "$@"
+                PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -W error -p no:cacheprovider -n auto --dist loadscope tests "$@"
               '';
             }
           );

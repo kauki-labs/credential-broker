@@ -157,7 +157,7 @@ GH_TOKEN=$TOKEN gh api -X DELETE /installation/token
 | `tests/test_acceptance_live.py` | CI and locally. Runs the live suite against a fake GitHub | An honest fake passes; a public sibling repo skips the private check; a wrong install, an over-wide App, a read token that can write and a failing revoke each fail the suite; the suite leaves no branch and revokes every token; it refuses to run without `ACCEPT_LIVE=1` |
 | `tests/acceptance_live.py` | Operator only, after registration. `ACCEPT_LIVE=1` plus the three env vars | Against real GitHub: the install is "Only select repositories" and reaches exactly `sandy` and `credential-broker`; the App permissions equal the ceiling; a read token reads and cannot write; a write token writes to its repo only; early revoke returns 401 |
 
-Run every offline suite with `nix run .#tests` from the repo root. Run the live suite with `ACCEPT_LIVE=1 python3 -I tests/acceptance_live.py` (add `-v` for one line per check).
+Run every offline suite with `nix run .#tests` from the repo root (pytest with xdist; pass pytest arguments after `--`, for example `-k webhook`). CI runs the same command. Run the live suite with `ACCEPT_LIVE=1 python3 -I tests/acceptance_live.py` (add `-v` for one line per check).
 
 The live suite creates and deletes one branch `acceptance/<time>-<pid>` on `credential-broker`.
 It stays out of CI because the key must never be there.
