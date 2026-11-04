@@ -21,7 +21,8 @@ tmp=$(mktemp -d)
 n=0
 read_both="" read_one="" write_token=""
 trap cleanup EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# fail also runs inside $(field ...): a plain exit there would end only the subshell and the suite would go on.
+fail() { echo "FAIL: $*" >&2; [ "$BASHPID" = "$$" ] || kill -s TERM "$$"; exit 1; }
 ok() { n=$((n + 1)); echo "ok $n: $*"; }
 
 # api <token> <method> <path> [json body]: prints the HTTP status, leaves the body in $tmp/body.
@@ -82,7 +83,7 @@ want "A2 read the App permissions" 200 "$(api "$jwt" GET "/app/installations/$GH
 want "A3 narrowed token lists repos" 200 "$(api "$read_one" GET /installation/repositories)"
 [ "$(field '[.repositories[].name] | join(",")')" = "$repo" ] || fail "A3 narrowed token reaches more than $repo"; ok "A3 token reaches only $repo"
 want "A3 look up $other" 200 "$(api "$read_both" GET "/repos/$owner/$other")"
-if [ "$(field .private)" = true ]; then
+if [ "$(field '.private | tostring')" = true ]; then
   want "A3 narrowed token cannot see private $other" 404 "$(api "$read_one" GET "/repos/$owner/$other")"
 else
   echo "skip: $other is public, so a narrowed token can read it; the A5 write check covers separation"

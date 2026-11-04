@@ -62,7 +62,8 @@ case "$method $path" in
     touch "$FAKE_DIR/revoked/$token"; reply 204 ;;
   "GET /repos/kauki-labs/sandy")
     [ "$token" = ghs_readboth ] || reply 404 '{"message":"Not Found"}'
-    reply 200 '{"private":true,"default_branch":"main"}' ;;
+    priv=true; [ "${FAKE_GH:-}" != public_other ] || priv=false   # jq -e fails on false, so cover it
+    reply 200 "{\"private\":$priv,\"default_branch\":\"main\"}" ;;
   "GET /repos/kauki-labs/credential-broker/git/ref/heads/main" | "GET /repos/kauki-labs/sandy/git/ref/heads/main")
     reply 200 "{\"object\":{\"sha\":\"$sha\"}}" ;;
   "POST /repos/kauki-labs/credential-broker/git/refs")
@@ -88,6 +89,11 @@ grep -q 'live acceptance: .* checks passed' "$tmp/out" || fail "honest GitHub: n
 [ ! -e "$FAKE_DIR/branch" ] || fail "honest GitHub: the suite left the branch behind"; n=$((n + 1))
 [ "$(find "$FAKE_DIR/revoked" -type f | wc -l | tr -d ' ')" = 3 ] || fail "honest GitHub: not all three tokens were revoked"; n=$((n + 1))
 if grep -q 'ghs_' "$tmp/out" "$tmp/err"; then fail "a token reached the suite's output"; fi; n=$((n + 1))
+
+# a public sibling repo is the real-world case: A3 must skip, not fail
+run public_other || fail "public_other: the suite failed: $(cat "$tmp/err")"
+grep -q '^skip: sandy is public' "$tmp/out" || fail "public_other: no skip line"; n=$((n + 1))
+! grep -q 'FAIL' "$tmp/err" || fail "public_other: a FAIL line was printed yet the suite went on: $(cat "$tmp/err")"; n=$((n + 1))
 
 for mode in sel_all admin_perm read_writes revoke_fail; do
   if run "$mode"; then fail "$mode: the suite passed against a broken GitHub"; fi
