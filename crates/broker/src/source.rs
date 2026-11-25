@@ -2,11 +2,11 @@
 //! OpenBao-signed implementation plug in the same way.
 use std::{collections::HashMap, future::Future};
 
-/// A minted credential and its expiry (unix seconds).
+/// A minted credential and its expiry (unix seconds); held secrets have none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issued {
     pub token: String,
-    pub expires_at: u64,
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Debug, thiserror::Error)]

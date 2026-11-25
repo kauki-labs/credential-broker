@@ -49,7 +49,13 @@ impl Ca {
     }
 
     /// A leaf signed by this CA. `expired` backdates the validity window.
-    fn leaf(&self, cn: &str, san: Vec<String>, usage: ExtendedKeyUsagePurpose, expired: bool) -> (String, String) {
+    fn leaf(
+        &self,
+        cn: &str,
+        san: Vec<String>,
+        usage: ExtendedKeyUsagePurpose,
+        expired: bool,
+    ) -> (String, String) {
         let mut params = CertificateParams::new(san).expect("params");
         params.distinguished_name = DistinguishedName::new();
         params.distinguished_name.push(DnType::CommonName, cn);
@@ -64,9 +70,12 @@ impl Ca {
     }
 }
 
+/// Repositories and write flag of one mint request.
+type Call = (Vec<String>, bool);
+
 #[derive(Clone, Default)]
 struct FakeGithub {
-    calls: Arc<Mutex<Vec<(Vec<String>, bool)>>>,
+    calls: Arc<Mutex<Vec<Call>>>,
 }
 
 impl GithubApi for FakeGithub {
@@ -75,8 +84,16 @@ impl GithubApi for FakeGithub {
         repos: &[String],
         write: bool,
     ) -> impl Future<Output = Result<Issued, SourceError>> + Send {
-        self.calls.lock().expect("lock").push((repos.to_vec(), write));
-        async { Ok(Issued { token: "ghs_fake".to_owned(), expires_at: 4_000_000_000 }) }
+        self.calls
+            .lock()
+            .expect("lock")
+            .push((repos.to_vec(), write));
+        async {
+            Ok(Issued {
+                token: "ghs_fake".to_owned(),
+                expires_at: Some(4_000_000_000),
+            })
+        }
     }
 }
 
@@ -102,7 +119,10 @@ async fn start() -> Harness {
         client_ca_pem: runners_ca.cert.pem(),
     };
     let github = FakeGithub::default();
-    let secrets = StaticSecrets::new(HashMap::from([("anthropic".to_owned(), "sk-ant-real".to_owned())]));
+    let secrets = StaticSecrets::new(HashMap::from([(
+        "anthropic".to_owned(),
+        "sk-ant-real".to_owned(),
+    )]));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let policy = Policy::parse(POLICY).expect("policy");
@@ -110,26 +130,38 @@ async fn start() -> Harness {
     tokio::spawn(async move {
         let _ = serve(listener, &tls, policy, served, secrets).await;
     });
-    Harness { addr, runners_ca, server_ca_pem: server_ca.cert.pem(), github }
+    Harness {
+        addr,
+        runners_ca,
+        server_ca_pem: server_ca.cert.pem(),
+        github,
+    }
 }
 
 /// One GET over mTLS. `client` is the (cert, key) PEM pair, or `None` for no certificate.
-async fn get(h: &Harness, client: Option<(String, String)>, path: &str) -> io::Result<(u16, String)> {
+async fn get(
+    h: &Harness,
+    client: Option<(String, String)>,
+    path: &str,
+) -> io::Result<(u16, String)> {
     let mut roots = RootCertStore::empty();
     for ca in CertificateDer::pem_slice_iter(h.server_ca_pem.as_bytes()) {
         roots.add(ca.expect("ca pem")).expect("root");
     }
-    let builder = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .expect("versions")
-        .with_root_certificates(roots);
+    let builder =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .with_root_certificates(roots);
     let config = match client {
         Some((cert, key)) => {
             let chain = CertificateDer::pem_slice_iter(cert.as_bytes())
                 .collect::<Result<Vec<_>, _>>()
                 .expect("cert pem");
             let key = PrivateKeyDer::from_pem_slice(key.as_bytes()).expect("key pem");
-            builder.with_client_auth_cert(chain, key).expect("client auth")
+            builder
+                .with_client_auth_cert(chain, key)
+                .expect("client auth")
         }
         None => builder.with_no_client_auth(),
     };
@@ -137,8 +169,10 @@ async fn get(h: &Harness, client: Option<(String, String)>, path: &str) -> io::R
     let mut tls = TlsConnector::from(Arc::new(config))
         .connect(ServerName::try_from("localhost").expect("name"), tcp)
         .await?;
-    tls.write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
-        .await?;
+    tls.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+    .await?;
     let mut raw = Vec::new();
     tls.read_to_end(&mut raw).await?;
     let text = String::from_utf8_lossy(&raw).into_owned();
@@ -152,7 +186,8 @@ async fn get(h: &Harness, client: Option<(String, String)>, path: &str) -> io::R
 }
 
 fn runner(h: &Harness, cn: &str) -> (String, String) {
-    h.runners_ca.leaf(cn, vec![], ExtendedKeyUsagePurpose::ClientAuth, false)
+    h.runners_ca
+        .leaf(cn, vec![], ExtendedKeyUsagePurpose::ClientAuth, false)
 }
 
 /// True when the call did not end in a 2xx answer: a TLS failure or an error status.
@@ -163,9 +198,13 @@ fn refused(outcome: &io::Result<(u16, String)>) -> bool {
 #[tokio::test]
 async fn token_api_should_return_a_github_token_when_the_runner_is_allowed() {
     let h = start().await;
-    let (status, body) = get(&h, Some(runner(&h, "runner-1")), "/v1/token?host=api.github.com")
-        .await
-        .expect("answer");
+    let (status, body) = get(
+        &h,
+        Some(runner(&h, "runner-1")),
+        "/v1/token?host=api.github.com",
+    )
+    .await
+    .expect("answer");
     assert_eq!(status, 200, "{body}");
     assert!(body.contains("\"token\":\"ghs_fake\""), "{body}");
     assert!(body.contains("\"expires_at\":4000000000"), "{body}");
@@ -176,9 +215,13 @@ async fn token_api_should_return_a_github_token_when_the_runner_is_allowed() {
 #[tokio::test]
 async fn token_api_should_return_the_held_secret_when_the_rule_is_static() {
     let h = start().await;
-    let (status, body) = get(&h, Some(runner(&h, "runner-1")), "/v1/token?host=api.anthropic.com")
-        .await
-        .expect("answer");
+    let (status, body) = get(
+        &h,
+        Some(runner(&h, "runner-1")),
+        "/v1/token?host=api.anthropic.com",
+    )
+    .await
+    .expect("answer");
     assert_eq!(status, 200, "{body}");
     assert!(body.contains("\"token\":\"sk-ant-real\""), "{body}");
 }
@@ -186,9 +229,13 @@ async fn token_api_should_return_the_held_secret_when_the_rule_is_static() {
 #[tokio::test]
 async fn token_api_should_deny_when_the_host_has_no_rule_for_the_subject() {
     let h = start().await;
-    let (status, body) = get(&h, Some(runner(&h, "runner-1")), "/v1/token?host=evil.example")
-        .await
-        .expect("answer");
+    let (status, body) = get(
+        &h,
+        Some(runner(&h, "runner-1")),
+        "/v1/token?host=evil.example",
+    )
+    .await
+    .expect("answer");
     assert_eq!(status, 403, "{body}");
     assert!(body.contains("no-rule"), "{body}");
     assert!(h.github.calls.lock().expect("lock").is_empty());
@@ -197,9 +244,13 @@ async fn token_api_should_deny_when_the_host_has_no_rule_for_the_subject() {
 #[tokio::test]
 async fn token_api_should_deny_when_the_subject_is_outside_the_policy() {
     let h = start().await;
-    let (status, _) = get(&h, Some(runner(&h, "runner-2")), "/v1/token?host=api.github.com")
-        .await
-        .expect("answer");
+    let (status, _) = get(
+        &h,
+        Some(runner(&h, "runner-2")),
+        "/v1/token?host=api.github.com",
+    )
+    .await
+    .expect("answer");
     assert_eq!(status, 403);
     assert!(h.github.calls.lock().expect("lock").is_empty());
 }
@@ -216,7 +267,12 @@ async fn token_api_should_reject_when_no_client_certificate_is_presented() {
 async fn token_api_should_reject_when_the_certificate_comes_from_a_foreign_ca() {
     let h = start().await;
     let foreign = Ca::new("foreign");
-    let cert = foreign.leaf("runner-1", vec![], ExtendedKeyUsagePurpose::ClientAuth, false);
+    let cert = foreign.leaf(
+        "runner-1",
+        vec![],
+        ExtendedKeyUsagePurpose::ClientAuth,
+        false,
+    );
     let outcome = get(&h, Some(cert), "/v1/token?host=api.github.com").await;
     assert!(refused(&outcome), "{outcome:?}");
     assert!(h.github.calls.lock().expect("lock").is_empty());
@@ -225,7 +281,12 @@ async fn token_api_should_reject_when_the_certificate_comes_from_a_foreign_ca() 
 #[tokio::test]
 async fn token_api_should_reject_when_the_certificate_is_expired() {
     let h = start().await;
-    let cert = h.runners_ca.leaf("runner-1", vec![], ExtendedKeyUsagePurpose::ClientAuth, true);
+    let cert = h.runners_ca.leaf(
+        "runner-1",
+        vec![],
+        ExtendedKeyUsagePurpose::ClientAuth,
+        true,
+    );
     let outcome = get(&h, Some(cert), "/v1/token?host=api.github.com").await;
     assert!(refused(&outcome), "{outcome:?}");
     assert!(h.github.calls.lock().expect("lock").is_empty());
@@ -234,6 +295,8 @@ async fn token_api_should_reject_when_the_certificate_is_expired() {
 #[tokio::test]
 async fn token_api_should_answer_400_when_the_host_parameter_is_missing() {
     let h = start().await;
-    let (status, _) = get(&h, Some(runner(&h, "runner-1")), "/v1/token").await.expect("answer");
+    let (status, _) = get(&h, Some(runner(&h, "runner-1")), "/v1/token")
+        .await
+        .expect("answer");
     assert_eq!(status, 400);
 }

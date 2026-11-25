@@ -16,6 +16,17 @@
         ] (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            cargo
+            clippy
+            rustc
+            rustfmt
+          ];
+        };
+      });
+
       # `nix run .#tests` from the repo root: lint the shell scripts, then run every offline suite
       # with pytest-xdist (extra arguments go to pytest).
       # The live suite (tests/acceptance_live.py) is not here: it needs the real key.

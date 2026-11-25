@@ -40,7 +40,9 @@ impl Denied {
 pub enum PolicyError {
     #[error("policy is not valid: {0}")]
     Invalid(String),
-    #[error("policy has no rules; refusing to start with a policy that denies everything silently")]
+    #[error(
+        "policy has no rules; refusing to start with a policy that denies everything silently"
+    )]
     Empty,
 }
 
@@ -53,14 +55,25 @@ pub struct Policy {
 impl Policy {
     /// Parse `{"rules":[...]}`. An empty rule list is an error.
     pub fn parse(json: &str) -> Result<Self, PolicyError> {
-        let _ = json;
-        Err(PolicyError::Empty)
+        #[derive(Deserialize)]
+        struct File {
+            rules: Vec<Rule>,
+        }
+        let File { rules } =
+            serde_json::from_str(json).map_err(|e| PolicyError::Invalid(e.to_string()))?;
+        match rules.is_empty() {
+            true => Err(PolicyError::Empty),
+            false => Ok(Self { rules }),
+        }
     }
 
     /// The grant for `subject` asking about `host`, or why not.
     pub fn decide(&self, subject: &str, host: &str) -> Result<&Grant, Denied> {
-        let _ = (subject, host, &self.rules);
-        Err(Denied::NoRule)
+        self.rules
+            .iter()
+            .find(|rule| rule.subject == subject && rule.host == host)
+            .map(|rule| &rule.grant)
+            .ok_or(Denied::NoRule)
     }
 }
 
@@ -74,7 +87,13 @@ mod tests {
     fn policy_should_allow_when_subject_and_host_match_a_rule() {
         let policy = Policy::parse(ONE).expect("parse");
         let grant = policy.decide("r1", "api.github.com").expect("allow");
-        assert_eq!(grant, &Grant::Github { repos: vec!["sandy".to_owned()], write: true });
+        assert_eq!(
+            grant,
+            &Grant::Github {
+                repos: vec!["sandy".to_owned()],
+                write: true
+            }
+        );
     }
 
     #[test]
@@ -92,16 +111,25 @@ mod tests {
     #[test]
     fn policy_should_not_match_a_subject_by_prefix() {
         let policy = Policy::parse(ONE).expect("parse");
-        assert_eq!(policy.decide("r1-evil", "api.github.com"), Err(Denied::NoRule));
+        assert_eq!(
+            policy.decide("r1-evil", "api.github.com"),
+            Err(Denied::NoRule)
+        );
     }
 
     #[test]
     fn policy_should_refuse_to_load_when_there_are_no_rules() {
-        assert!(matches!(Policy::parse(r#"{"rules":[]}"#), Err(PolicyError::Empty)));
+        assert!(matches!(
+            Policy::parse(r#"{"rules":[]}"#),
+            Err(PolicyError::Empty)
+        ));
     }
 
     #[test]
     fn policy_should_refuse_to_load_when_the_json_is_malformed() {
-        assert!(matches!(Policy::parse("not json"), Err(PolicyError::Invalid(_))));
+        assert!(matches!(
+            Policy::parse("not json"),
+            Err(PolicyError::Invalid(_))
+        ));
     }
 }
