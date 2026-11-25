@@ -27,3 +27,4 @@ settings.local.json
 *.p12
 *.pfx
 *id_ed25519*
+/target
